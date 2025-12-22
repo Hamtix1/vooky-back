@@ -8,6 +8,7 @@ use App\Models\Level;
 use App\Models\Badge;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class LessonGameController extends Controller
 {
@@ -19,17 +20,34 @@ class LessonGameController extends Controller
         $lesson = Lesson::with('level')->findOrFail($lessonId);
         $level = $lesson->level;
         
-        // Obtener todas las imágenes disponibles:
-        // - De niveles anteriores (todos los días)
-        // - Del nivel actual (hasta el día de la lección)
-        $availableImages = Image::where(function($query) use ($level, $lesson) {
-                // Imágenes de niveles anteriores (todas)
-                $query->where('level_id', '<', $level->id)
-                    // O imágenes del nivel actual hasta el día de la lección
-                    ->orWhere(function($q) use ($level, $lesson) {
-                        $q->where('level_id', $level->id)
-                          ->where('dia', '<=', $lesson->dia);
-                    });
+        // Obtener todas las imágenes disponibles DENTRO del mismo curso:
+        // - De niveles anteriores dentro del mismo curso (todos los días)
+        // - Del nivel actual dentro del mismo curso (hasta el día de la lección)
+        // Usamos la columna `order` en la tabla levels para comparar posiciones dentro del curso
+        $availableImages = Image::whereHas('level', function($q) use ($level) {
+                $q->where('course_id', $level->course_id)
+                  ->where(function($qq) use ($level) {
+                      // Niveles anteriores dentro del mismo curso (todas las imágenes)
+                      $qq->where('order', '<', $level->order)
+                         // O nivel actual (mismo order)
+                         ->orWhere('order', $level->order);
+                  });
+            })
+            ->where(function($q) use ($level, $lesson) {
+                // Filtro adicional para el campo 'dia' que está en la tabla images
+                $q->whereHas('level', function($qq) use ($level) {
+                    // De niveles anteriores: todas las imágenes
+                    $qq->where('course_id', $level->course_id)
+                       ->where('order', '<', $level->order);
+                })
+                ->orWhere(function($qq) use ($level, $lesson) {
+                    // Del nivel actual: solo hasta el día de la lección
+                    $qq->whereHas('level', function($qqq) use ($level) {
+                        $qqq->where('course_id', $level->course_id)
+                            ->where('order', $level->order);
+                    })
+                    ->where('dia', '<=', $lesson->dia);
+                });
             })
             ->with(['category', 'subcategories']) // Cargar categoría y subcategorías
             ->get();
@@ -89,7 +107,7 @@ class LessonGameController extends Controller
             }
         } else {
             // Por defecto, usar preguntas combinadas
-            \Log::warning("Unknown content_type '{$lesson->content_type}', using mixed categories as default");
+            Log::warning("Unknown content_type '{$lesson->content_type}', using mixed categories as default");
             $questions = $this->generateMixedCategoryQuestions($availableImages, $totalQuestions, $lesson->dia);
         }
 
@@ -122,8 +140,8 @@ class LessonGameController extends Controller
         $currentDayQuestions = $currentDayImages->isNotEmpty() ? (int)ceil($count / 2) : 0;
         $previousDaysQuestions = $count - $currentDayQuestions;
         
-        \Log::info("Mixed questions: {$currentDayQuestions} from day {$lessonDay}, {$previousDaysQuestions} from previous days");
-        \Log::info("Available images for day {$lessonDay}: " . $currentDayImages->count());
+    Log::info("Mixed questions: {$currentDayQuestions} from day {$lessonDay}, {$previousDaysQuestions} from previous days");
+    Log::info("Available images for day {$lessonDay}: " . $currentDayImages->count());
         
         // Generar preguntas del día actual (PRIMERO, sin mezclar - permite repetición)
         for ($i = 0; $i < $currentDayQuestions; $i++) {
