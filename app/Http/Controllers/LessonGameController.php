@@ -753,3 +753,4 @@ class LessonGameController extends Controller
             ], 500);
         }
     }
+}
