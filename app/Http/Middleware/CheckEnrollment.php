@@ -24,22 +24,28 @@ class CheckEnrollment
             return $next($request);
         }
 
-        // Obtener el ID de la lección desde la ruta
-        $lessonId = $request->route('lesson');
+        // Obtener la lección desde la ruta
+        // Laravel hace implicit binding, así que podría ser un objeto Lesson o un ID
+        $lessonParam = $request->route('lesson');
         
-        if (!$lessonId) {
+        if (!$lessonParam) {
             return response()->json([
                 'message' => 'No se pudo identificar la lección'
             ], 400);
         }
 
-        // Buscar la lección y su curso
-        $lesson = Lesson::with('level.course')->find($lessonId);
-        
-        if (!$lesson) {
-            return response()->json([
-                'message' => 'Lección no encontrada'
-            ], 404);
+        // Si es un objeto Lesson (implicit binding), usarlo directamente
+        // Si es un ID, hacer una búsqueda
+        if ($lessonParam instanceof Lesson) {
+            $lesson = $lessonParam;
+        } else {
+            $lesson = Lesson::with('level.course')->find($lessonParam);
+            
+            if (!$lesson) {
+                return response()->json([
+                    'message' => 'Lección no encontrada'
+                ], 404);
+            }
         }
 
         $course = $lesson->level->course;
