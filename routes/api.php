@@ -131,16 +131,16 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('lessons/{lesson}/uncomplete', [EnrollmentController::class, 'uncompleteLesson'])->middleware('enrolled');
     Route::get('courses/{course}/progress', [EnrollmentController::class, 'courseProgress']);
     
+    // OPTIMIZACIÓN: Obtener progreso de MÚLTIPLES lecciones en una sola llamada
+    // NO requiere 'enrolled' porque es solo lectura
+    Route::post('lessons/batch/progress', [LessonGameController::class, 'getBatchProgress']);
+    
     // Rutas del juego de lecciones - REQUIEREN INSCRIPCIÓN ACTIVA
     Route::middleware('enrolled')->group(function () {
         Route::get('lessons/{lesson}/questions', [LessonGameController::class, 'getQuestions']);
         Route::post('lessons/{lesson}/result', [LessonGameController::class, 'saveResult']);
         Route::get('lessons/{lesson}/progress', [LessonGameController::class, 'getProgress']);
     });
-    
-    // OPTIMIZACIÓN: Obtener progreso de MÚLTIPLES lecciones en una sola llamada
-    // Evita N+1 queries cuando se cargan mapas de cursos completos
-    Route::post('lessons/batch/progress', [LessonGameController::class, 'getBatchProgress']);
     
     // Rutas de insignias para usuarios (solo lectura)
     Route::get('users/{user}/courses/{course}/badges', [BadgeController::class, 'userBadges']);
