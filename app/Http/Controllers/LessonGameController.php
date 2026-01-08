@@ -632,25 +632,47 @@ class LessonGameController extends Controller
     public function getBatchProgress(Request $request)
     {
         try {
-            $request->validate([
+            // Verificar que el usuario está autenticado
+            if (!$request->user()) {
+                return response()->json([
+                    'error' => 'Unauthenticated',
+                    'message' => 'Usuario no autenticado'
+                ], 401);
+            }
+
+            // Validar que se envíen lesson_ids
+            $validated = $request->validate([
                 'lesson_ids' => 'required|array|min:1|max:100',
-                'lesson_ids.*' => 'required|integer|exists:lessons,id',
+                'lesson_ids.*' => 'required|integer|min:1',
             ]);
 
             $user = $request->user();
-            $lessonIds = $request->input('lesson_ids');
+            $lessonIds = $validated['lesson_ids'];
+            
+            // Verificar que los lesson_ids existen en BD (más flexible que en validación)
+            $validLessonIds = \App\Models\Lesson::whereIn('id', $lessonIds)
+                ->pluck('id')
+                ->toArray();
+            
+            // Si no hay lecciones válidas, retornar array vacío
+            if (empty($validLessonIds)) {
+                return response()->json([
+                    'data' => [],
+                    'count' => 0
+                ]);
+            }
             
             // Una única query para obtener TODO el progreso
             $progress = DB::table('lesson_user')
                 ->where('user_id', $user->id)
-                ->whereIn('lesson_id', $lessonIds)
+                ->whereIn('lesson_id', $validLessonIds)
                 ->select('lesson_id', 'completed_at', 'accuracy', 'game_score', 'correct_answers', 'total_questions')
                 ->get()
                 ->keyBy('lesson_id');
 
             // Construir respuesta con progreso para cada lección (null si no existe)
             $result = [];
-            foreach ($lessonIds as $lessonId) {
+            foreach ($validLessonIds as $lessonId) {
                 $lessonProgress = $progress->get($lessonId);
                 
                 if ($lessonProgress) {
@@ -680,7 +702,14 @@ class LessonGameController extends Controller
                 'data' => $result,
                 'count' => count($result)
             ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'error' => 'Validation error',
+                'message' => $e->getMessage(),
+                'errors' => $e->errors()
+            ], 422);
         } catch (\Exception $e) {
+            \Log::error('Error en getBatchProgress: ' . $e->getMessage());
             return response()->json([
                 'error' => 'Error al obtener el progreso en lote',
                 'message' => $e->getMessage(),
