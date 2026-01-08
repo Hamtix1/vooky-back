@@ -6,6 +6,7 @@ use App\Http\Requests\StoreCourseRequest;
 use App\Http\Requests\UpdateCourseRequest;
 use App\Http\Resources\CourseResource;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use App\Models\Course;
 
 class CourseController extends Controller
@@ -43,13 +44,64 @@ class CourseController extends Controller
     /**
      * Display the specified resource.
      */
-    public function show(Course $course)
+    public function show(Course $course, Request $request)
     {
         // Laravel inyecta automáticamente el curso encontrado por su slug.
-        // Solo cargamos las relaciones que necesitamos.
-        $course->load('levels.images.subcategories', 'levels.lessons');
+        // Cargamos diferentes relaciones según si es admin o usuario normal
+        $user = $request->user();
+        $isAdmin = $user && $user->role === 'admin';
+        
+        if ($isAdmin) {
+            // Admins necesitan todo para editar
+            $course->load('levels.images.subcategories', 'levels.lessons');
+        } else {
+            // Usuarios normales solo necesitan niveles y lecciones
+            // IMPORTANTE: Cargar progress del usuario para evitar N+1 queries
+            $course->load([
+                'levels' => function ($query) {
+                    $query->orderBy('order');
+                },
+                'levels.lessons' => function ($query) {
+                    $query->select('id', 'title', 'content_type', 'level_id', 'dia')
+                          ->orderBy('dia');
+                }
+            ]);
+            
+            // Pre-cargar el progreso del usuario en una sola query
+            if ($user) {
+                $this->preloadUserProgress($course, $user);
+            }
+        }
 
         return new CourseResource($course);
+    }
+    
+    /**
+     * Pre-carga el progreso de todas las lecciones del usuario en una sola query
+     * para evitar N+1 queries después
+     */
+    private function preloadUserProgress(Course $course, $user)
+    {
+        // Obtener todos los lesson_ids del curso
+        $lessonIds = $course->levels
+            ->flatMap(fn($level) => $level->lessons)
+            ->pluck('id')
+            ->toArray();
+        
+        if (empty($lessonIds)) {
+            return;
+        }
+        
+        // Cargar TODO el progreso en una sola query
+        $progressData = DB::table('lesson_user')
+            ->where('user_id', $user->id)
+            ->whereIn('lesson_id', $lessonIds)
+            ->select('lesson_id', 'completed_at', 'accuracy', 'game_score', 'correct_answers', 'total_questions')
+            ->get()
+            ->keyBy('lesson_id');
+        
+        // Adjuntar al objeto course para que esté disponible en el frontend
+        $course->setAttribute('_user_progress', $progressData);
     }
 
     /**

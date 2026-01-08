@@ -622,4 +622,68 @@ class LessonGameController extends Controller
             ], 500);
         }
     }
-}
+
+    /**
+     * Obtiene el progreso del usuario para MÚLTIPLES lecciones de una vez
+     * OPTIMIZATION: Evita N+1 queries cuando se necesita el progreso de muchas lecciones
+     * 
+     * Request body: { "lesson_ids": [1, 2, 3, 4, 5...] }
+     */
+    public function getBatchProgress(Request $request)
+    {
+        try {
+            $request->validate([
+                'lesson_ids' => 'required|array|min:1|max:100',
+                'lesson_ids.*' => 'required|integer|exists:lessons,id',
+            ]);
+
+            $user = $request->user();
+            $lessonIds = $request->input('lesson_ids');
+            
+            // Una única query para obtener TODO el progreso
+            $progress = DB::table('lesson_user')
+                ->where('user_id', $user->id)
+                ->whereIn('lesson_id', $lessonIds)
+                ->select('lesson_id', 'completed_at', 'accuracy', 'game_score', 'correct_answers', 'total_questions')
+                ->get()
+                ->keyBy('lesson_id');
+
+            // Construir respuesta con progreso para cada lección (null si no existe)
+            $result = [];
+            foreach ($lessonIds as $lessonId) {
+                $lessonProgress = $progress->get($lessonId);
+                
+                if ($lessonProgress) {
+                    $result[$lessonId] = [
+                        'lesson_id' => $lessonId,
+                        'completed' => !is_null($lessonProgress->completed_at),
+                        'accuracy' => $lessonProgress->accuracy ?? null,
+                        'game_score' => $lessonProgress->game_score ?? null,
+                        'correct_answers' => $lessonProgress->correct_answers ?? null,
+                        'total_questions' => $lessonProgress->total_questions ?? null,
+                        'completed_at' => $lessonProgress->completed_at,
+                    ];
+                } else {
+                    $result[$lessonId] = [
+                        'lesson_id' => $lessonId,
+                        'completed' => false,
+                        'accuracy' => null,
+                        'game_score' => null,
+                        'correct_answers' => null,
+                        'total_questions' => null,
+                        'completed_at' => null,
+                    ];
+                }
+            }
+
+            return response()->json([
+                'data' => $result,
+                'count' => count($result)
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Error al obtener el progreso en lote',
+                'message' => $e->getMessage(),
+            ], 500);
+        }
+    }

@@ -138,6 +138,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('lessons/{lesson}/progress', [LessonGameController::class, 'getProgress']);
     });
     
+    // OPTIMIZACIÓN: Obtener progreso de MÚLTIPLES lecciones en una sola llamada
+    // Evita N+1 queries cuando se cargan mapas de cursos completos
+    Route::post('lessons/batch/progress', [LessonGameController::class, 'getBatchProgress']);
+    
     // Rutas de insignias para usuarios (solo lectura)
     Route::get('users/{user}/courses/{course}/badges', [BadgeController::class, 'userBadges']);
     
