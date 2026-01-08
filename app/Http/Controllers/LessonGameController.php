@@ -591,12 +591,24 @@ class LessonGameController extends Controller
         try {
             $user = $request->user();
             
+            // Validar que lessonId sea un número válido
+            if (!is_numeric($lessonId) || $lessonId <= 0) {
+                Log::warning('getProgress: lesson_id inválido', ['lesson_id' => $lessonId]);
+                return response()->json([
+                    'error' => 'Invalid lesson ID',
+                    'message' => 'El ID de la lección no es válido'
+                ], 400);
+            }
+            
+            Log::debug('getProgress: Obteniendo progreso', ['user_id' => $user->id, 'lesson_id' => $lessonId]);
+            
             $progress = DB::table('lesson_user')
                 ->where('user_id', $user->id)
-                ->where('lesson_id', $lessonId)
+                ->where('lesson_id', (int)$lessonId)
                 ->first();
 
             if (!$progress) {
+                Log::debug('getProgress: No hay progreso registrado', ['user_id' => $user->id, 'lesson_id' => $lessonId]);
                 return response()->json([
                     'completed' => false,
                     'accuracy' => null,
@@ -607,6 +619,8 @@ class LessonGameController extends Controller
                 ]);
             }
 
+            Log::debug('getProgress: Progreso encontrado', ['progress' => $progress]);
+            
             return response()->json([
                 'completed' => !is_null($progress->completed_at),
                 'accuracy' => $progress->accuracy ?? null,
@@ -615,10 +629,16 @@ class LessonGameController extends Controller
                 'total_questions' => $progress->total_questions ?? null,
                 'completed_at' => $progress->completed_at,
             ]);
-        } catch (\Exception $e) {            
+        } catch (\Exception $e) {
+            Log::error('getProgress: Error al obtener el progreso', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'lesson_id' => $lessonId
+            ]);
             return response()->json([
                 'error' => 'Error al obtener el progreso',
-                'message' => $e->getMessage(),
+                'message' => 'Ocurrió un error al obtener el progreso',
             ], 500);
         }
     }
@@ -633,7 +653,9 @@ class LessonGameController extends Controller
     {
         try {
             // Verificar que el usuario está autenticado
-            if (!$request->user()) {
+            $user = $request->user();
+            if (!$user) {
+                Log::warning('getBatchProgress: Usuario no autenticado');
                 return response()->json([
                     'error' => 'Unauthenticated',
                     'message' => 'Usuario no autenticado'
@@ -646,16 +668,15 @@ class LessonGameController extends Controller
                 'lesson_ids.*' => 'required|integer|min:1',
             ]);
 
-            $user = $request->user();
             $lessonIds = $validated['lesson_ids'];
+            Log::debug('getBatchProgress: Solicitando progreso para lessons', ['lesson_ids' => $lessonIds, 'user_id' => $user->id]);
             
-            // Verificar que los lesson_ids existen en BD (más flexible que en validación)
-            $validLessonIds = \App\Models\Lesson::whereIn('id', $lessonIds)
-                ->pluck('id')
-                ->toArray();
+            // Filtrar IDs válidos directamente sin hacer consulta adicional
+            // Simplemente usar los IDs tal como vienen (confianza en el cliente)
+            $validLessonIds = array_filter($lessonIds, fn($id) => is_numeric($id) && $id > 0);
             
-            // Si no hay lecciones válidas, retornar array vacío
             if (empty($validLessonIds)) {
+                Log::warning('getBatchProgress: No hay IDs de lección válidos', ['original' => $lessonIds]);
                 return response()->json([
                     'data' => [],
                     'count' => 0
@@ -663,17 +684,25 @@ class LessonGameController extends Controller
             }
             
             // Una única query para obtener TODO el progreso
-            $progress = DB::table('lesson_user')
+            // Usar whereIn directamente con los IDs sin hacer consulta de verificación primero
+            $progressData = DB::table('lesson_user')
                 ->where('user_id', $user->id)
                 ->whereIn('lesson_id', $validLessonIds)
                 ->select('lesson_id', 'completed_at', 'accuracy', 'game_score', 'correct_answers', 'total_questions')
-                ->get()
-                ->keyBy('lesson_id');
+                ->get();
+
+            Log::debug('getBatchProgress: Datos obtenidos de BD', ['count' => $progressData->count()]);
+
+            // Convertir a un mapa keyed por lesson_id
+            $progressMap = [];
+            foreach ($progressData as $progress) {
+                $progressMap[$progress->lesson_id] = $progress;
+            }
 
             // Construir respuesta con progreso para cada lección (null si no existe)
             $result = [];
             foreach ($validLessonIds as $lessonId) {
-                $lessonProgress = $progress->get($lessonId);
+                $lessonProgress = $progressMap[$lessonId] ?? null;
                 
                 if ($lessonProgress) {
                     $result[$lessonId] = [
@@ -698,18 +727,26 @@ class LessonGameController extends Controller
                 }
             }
 
+            Log::debug('getBatchProgress: Respuesta construida', ['result_count' => count($result)]);
+            
             return response()->json([
                 'data' => $result,
                 'count' => count($result)
             ]);
         } catch (\Illuminate\Validation\ValidationException $e) {
+            Log::error('getBatchProgress: Validation error', ['errors' => $e->errors()]);
             return response()->json([
                 'error' => 'Validation error',
-                'message' => $e->getMessage(),
+                'message' => 'Los datos enviados no son válidos',
                 'errors' => $e->errors()
             ], 422);
         } catch (\Exception $e) {
-            \Log::error('Error en getBatchProgress: ' . $e->getMessage());
+            Log::error('getBatchProgress: Error general', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString()
+            ]);
             return response()->json([
                 'error' => 'Error al obtener el progreso en lote',
                 'message' => $e->getMessage(),
